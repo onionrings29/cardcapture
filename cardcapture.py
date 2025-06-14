@@ -439,8 +439,24 @@ def process_image(client, image_dir, filename):
     converted_path = None
     cropped_path = None
     
+    # For PNG files, attempt to crop in place, only delete if cropping is successful
+    if filename.lower().endswith('.png'):
+        cropped_path = detect_and_crop_card(image_dir, filename, file_path)
+        if cropped_path:
+            try:
+                os.remove(file_path)
+                logging.info(f"Cropped and deleted original PNG: {filename}")
+            except Exception as e:
+                logging.error(f"Failed to delete original PNG after cropping {filename}: {e}")
+            ocr_path = cropped_path
+        else:
+            logging.warning(f"Cropping failed for PNG: {filename}. Original retained.")
+            return {
+                "id": filename,
+                "error": "Cropping failed for PNG. Original retained."
+            }
     # Step 1: Convert HEIC if necessary
-    if is_heic_file(filename):
+    elif is_heic_file(filename):
         if not has_heic_support:
             logging.error(f"Cannot process HEIC file {filename}: pillow-heif not installed")
             return {
@@ -458,45 +474,52 @@ def process_image(client, image_dir, filename):
         
         # Use converted file as source for further processing
         source_for_cropping = converted_path
-    else:
-        source_for_cropping = file_path
-    
-    # Step 2: Crop if enabled
-    if CONFIG["enable_cropping"]:
-        logging.info(f"Attempting to crop: {filename}")
-        cropped_path = detect_and_crop_card(image_dir, filename, source_for_cropping)
-        if cropped_path:
-            logging.info(f"Cropping successful: {filename}")
-            
-            # Delete original image if cropping was successful
-            try:
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-                    logging.info(f"Deleted original image: {filename}")
-                if converted_path and os.path.exists(converted_path):
-                    os.remove(converted_path)
-                    logging.info(f"Deleted converted image: {os.path.basename(converted_path)}")
-            except OSError as e:
-                logging.error(f"Failed to delete original image {filename}: {e}")
+        # Step 2: Crop if enabled
+        if CONFIG["enable_cropping"]:
+            cropped_path = detect_and_crop_card(image_dir, filename, source_for_cropping)
+            if cropped_path:
+                try:
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                        logging.info(f"Deleted original image: {filename}")
+                    if converted_path and os.path.exists(converted_path):
+                        os.remove(converted_path)
+                        logging.info(f"Deleted converted image: {os.path.basename(converted_path)}")
+                except OSError as e:
+                    logging.error(f"Failed to delete original image {filename}: {e}")
+            else:
+                logging.warning(f"Cropping failed or not needed: {filename}")
+            ocr_path = cropped_path or source_for_cropping
         else:
-            logging.warning(f"Cropping failed or not needed: {filename}")
-        ocr_path = cropped_path or source_for_cropping
+            ocr_path = source_for_cropping
     else:
-        ocr_path = source_for_cropping
+        # For non-HEIC (e.g. PNG or JPEG) files, skip conversion and attempt cropping.
+        source_for_cropping = file_path
+        if CONFIG["enable_cropping"]:
+            cropped_path = detect_and_crop_card(image_dir, filename, source_for_cropping)
+            if cropped_path:
+                try:
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                        logging.info(f"Deleted original non-HEIC image: {filename}")
+                except OSError as e:
+                    logging.error(f"Failed to delete original non-HEIC image {filename}: {e}")
+            else:
+                logging.warning(f"Cropping failed for non-HEIC image: {filename}. Original retained.")
+            ocr_path = cropped_path or source_for_cropping
+        else:
+            ocr_path = source_for_cropping
     
-    # Step 3: Perform OCR
+    # Step 3: Perform OCR (using ocr_path, which is either cropped or original)
     result = ocr_image(client, ocr_path)
     
     # Prepare the output structure
-    output = {
-        # Removing redundant id field since filename is already the key
-    }
+    output = {}
     
-    # Add cropping info with numbered filename
+    # Add cropping info with numbered filename (if cropped)
     if cropped_path and CONFIG["save_cropped"]:
         cropped_dir = os.path.join(image_dir, CONFIG["cropped_dir"])
         next_num = get_next_cropped_number(cropped_dir)
-        # Fix: ensure extension has a dot
         ext = "." + CONFIG["converted_format"] if is_heic_file(filename) else os.path.splitext(filename)[1]
         new_cropped_name = f"cropped_{next_num}{ext}"
         new_cropped_path = os.path.join(cropped_dir, new_cropped_name)
@@ -506,11 +529,10 @@ def process_image(client, image_dir, filename):
             logging.info(f"Renamed cropped file to: {new_cropped_name}")
         except OSError as e:
             logging.error(f"Failed to rename cropped file: {e}")
-            # Fallback to original cropped filename if rename fails
             output["cropped"] = os.path.basename(cropped_path)
     
     if result:
-        # Extract layout information with bounding boxes
+        # Extract layout information with bounding boxes (or raw text if no layout)
         if result.get("layout"):
             output["content"] = {
                 "blocks": [

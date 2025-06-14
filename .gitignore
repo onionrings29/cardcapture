@@ -32,6 +32,10 @@ env/
 *.swp
 *.swo
 
+# macOS
+.DS_Store
+**/.DS_Store
+
 # Project specific
 *.log
 ocr_results.json

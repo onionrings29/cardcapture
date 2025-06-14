@@ -491,22 +491,20 @@ class ItemProcessor:
         try:
             logger.debug(f"Raw response length: {len(response)}")
             
-            # First, try to find any JSON-like structure in the response
-            # Look for content between ```json and ``` markers first
+            # Log the raw response for debugging
+            logger.info("Raw LLM response:")
+            logger.info("-" * 50)
+            logger.info(response)
+            logger.info("-" * 50)
+            
+            # First, try to find JSON between ```json and ``` markers
             json_match = re.search(r'```json\s*([\s\S]*?)\s*```', response)
-            if json_match:
-                json_str = json_match.group(1)
-                logger.debug("Found JSON between markers")
-            else:
-                # If no ```json markers, try to find the last JSON object in the text
-                last_brace = response.rfind('{')
-                last_end = response.rfind('}')
-                if last_brace >= 0 and last_end > last_brace:
-                    json_str = response[last_brace:last_end+1]
-                    logger.debug("Found JSON without markers")
-                else:
-                    logger.error("No valid JSON found in response")
-                    return self._fallback_response()
+            if not json_match:
+                logger.error("No JSON markers found in response")
+                logger.error("Expected JSON between ```json and ``` markers")
+                return self._fallback_response()
+            
+            json_str = json_match.group(1)
             
             # Clean up the JSON string
             json_str = re.sub(r'<think>.*?</think>', '', json_str, flags=re.DOTALL)  # Remove think tags
@@ -514,93 +512,56 @@ class ItemProcessor:
             json_str = re.sub(r',\s*}', '}', json_str)  # Remove trailing commas
             json_str = re.sub(r',\s*]', ']', json_str)  # Remove trailing commas in arrays
             
-            # Parse the JSON
+            # Log the cleaned JSON string for debugging
+            logger.debug("Cleaned JSON string:")
+            logger.debug("-" * 50)
+            logger.debug(json_str)
+            logger.debug("-" * 50)
+            
+            # Try to parse the JSON
             try:
                 result = json.loads(json_str)
-                logger.debug("Successfully parsed JSON")
             except json.JSONDecodeError as e:
                 logger.error(f"JSON parse error: {e}")
-                logger.debug(f"Problematic JSON string: {json_str}")
+                logger.error("Invalid JSON structure:")
+                logger.error("-" * 50)
+                logger.error(json_str)
+                logger.error("-" * 50)
                 return self._fallback_response()
             
-            # Ensure we have the standard_categories structure
-            if 'standard_categories' not in result:
-                logger.warning("No standard_categories found, restructuring response")
-                result = {
-                    'standard_categories': {
-                        'id': str(result.get('id')),  # Convert ID to string
-                        'type': result.get('type'),
-                        'material': result.get('material'),
-                        'color': result.get('color'),
-                        'size': result.get('size', {
-                            'numerical': None,
-                            'descriptive': None,
-                            'unit': None,
-                            'notes': None
-                        }),
-                        'weight': result.get('weight', {
-                            'numerical': None,
-                            'unit': None,
-                            'notes': None
-                        }),
-                        'condition': result.get('condition', {
-                            'status': None,
-                            'wear_level': None,
-                            'damage_notes': None,
-                            'restoration_status': None
-                        }),
-                        'provenance': result.get('provenance', {
-                            'acquisition_date': None,
-                            'acquisition_location': None,
-                            'acquisition_method': None,
-                            'previous_owner': None,
-                            'historical_notes': None,
-                            'authenticity_notes': None
-                        }),
-                        'value': result.get('value', {
-                            'purchase_price': None,
-                            'estimated_value': None,
-                            'currency': None,
-                            'valuation_date': None,
-                            'valuation_notes': None
-                        }),
-                        'maintenance': result.get('maintenance', {
-                            'last_check_date': None,
-                            'cleaning_instructions': None,
-                            'storage_requirements': None,
-                            'special_care_notes': None
-                        }),
-                        'description': result.get('description'),
-                        'tags': result.get('tags', []),
-                        'notes': result.get('notes'),
-                        'related_items': result.get('related_items', [])
-                    },
-                    'custom_categories': result.get('custom', {}),
-                    'confidence': 0.5  # Default confidence for restructured responses
-                }
+            # Validate required structure
+            if not isinstance(result, dict) or 'standard_categories' not in result:
+                logger.error("Response missing required structure")
+                logger.error("Expected dict with 'standard_categories' key")
+                logger.error("Actual structure:")
+                logger.error("-" * 50)
+                logger.error(json.dumps(result, indent=2))
+                logger.error("-" * 50)
+                return self._fallback_response()
             
-            # Ensure all standard categories exist and convert types as needed
+            # Ensure all standard categories exist
             for key in STANDARD_CATEGORIES:
                 if key not in result['standard_categories']:
-                    logger.debug(f"Adding missing standard category: {key}")
                     result['standard_categories'][key] = None
                 elif key == 'id' and result['standard_categories'][key] is not None:
-                    # Convert ID to string if it exists
                     result['standard_categories'][key] = str(result['standard_categories'][key])
-                
-            # Ensure type exists
+            
+            # Ensure type exists and is valid
             if not result['standard_categories'].get('type'):
                 logger.warning("No type found, setting to unknown")
                 result['standard_categories']['type'] = "unknown"
             
-            # Add confidence score if not present
-            if 'confidence' not in result:
-                result['confidence'] = 0.8 if result['standard_categories'].get('type') != "unknown" else 0.5
-                
+            # Add confidence score
+            result['confidence'] = 0.8 if result['standard_categories'].get('type') != "unknown" else 0.5
+            
             return result
+            
         except Exception as e:
             logger.error(f"Response parsing failed: {e}")
-            logger.debug(f"Raw response was: {response}")
+            logger.error("Full raw response:")
+            logger.error("-" * 50)
+            logger.error(response)
+            logger.error("-" * 50)
             return self._fallback_response()
 
     def _fallback_response(self) -> Dict:
@@ -617,6 +578,10 @@ class ItemProcessor:
         try:
             # Get the file name and extension
             original_path = Path(image_path)
+            if not original_path.exists():
+                logger.error(f"Image file not found: {image_path}")
+                return None
+                
             file_ext = original_path.suffix
             
             # Create processed directory if it doesn't exist
@@ -630,7 +595,7 @@ class ItemProcessor:
             # Copy the file to processed directory with new name
             import shutil
             shutil.copy2(original_path, new_path)
-            logger.info(f"📁 Moved {original_path.name} to processed/{new_filename}")
+            logger.info(f"📁 Copied {original_path.name} to processed/{new_filename}")
             
             # Create a unique path in storage using the new filename
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -667,6 +632,13 @@ class ItemProcessor:
             doc_ref = db.collection('images').document(doc_id)
             doc_ref.set(image_data)
             logger.info(f"Created image document in Firestore: {doc_id}")
+            
+            # Delete the original file after successful upload
+            try:
+                original_path.unlink()
+                logger.info(f"🗑️ Deleted original file: {original_path.name}")
+            except Exception as e:
+                logger.error(f"Failed to delete original file {original_path.name}: {e}")
             
             # Return both the URL and the document reference
             return {
