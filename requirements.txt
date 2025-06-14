@@ -1,0 +1,13 @@
+numpy>=1.21.0
+opencv-python-headless>=4.5.0
+google-cloud-vision>=2.0.0
+tqdm>=4.62.0
+pillow-heif>=0.13.0
+Pillow>=9.0.0
+firebase-admin>=6.4.0
+python-dotenv>=1.0.1
+aiohttp>=3.9.3
+psutil>=5.9.0
+tenacity>=8.2.0
+typing-extensions>=4.0.0
+json5>=0.9.5 
